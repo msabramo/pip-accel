@@ -21,7 +21,6 @@ at https://github.com/paylogic/pip-accel
 """
 
 # Standard library modules.
-import logging
 import os
 import os.path
 import pkg_resources
@@ -33,25 +32,19 @@ import time
 import urllib
 import urlparse
 
+# Internal modules.
+from pip_accel.deps import sanity_check_dependencies
+from pip_accel.logger import logger
+
 # External dependencies.
-from coloredlogs import ColoredStreamHandler
 from pip.backwardcompat import string_types
 from pip.baseparser import create_main_parser
 from pip.commands.install import InstallCommand
 from pip.exceptions import DistributionNotFound, InstallationError
 from pip.status_codes import SUCCESS
 
-# Initialize the logging subsystem.
-logger = logging.getLogger('pip-accel')
-logger.setLevel(logging.INFO)
-logger.addHandler(ColoredStreamHandler())
-
 # Whether a user is directly looking at the output.
 INTERACTIVE = os.isatty(1)
-
-# Check if the operator requested verbose output.
-if '-v' in sys.argv or 'PIP_ACCEL_VERBOSE' in os.environ:
-    logger.setLevel(logging.DEBUG)
 
 # Find the environment where requirements are to be installed.
 ENVIRONMENT = os.path.abspath(os.environ.get('VIRTUAL_ENV', sys.prefix))
@@ -268,25 +261,42 @@ def build_binary_dists(requirements):
         if not os.path.isfile(setup_script):
             logger.warn("Warning: Package %s (%s) is not a source distribution.", name, version)
             continue
-        old_directory = os.getcwd()
-        # Build a binary distribution.
-        os.chdir(directory)
-        logger.info("Building binary distribution of %s (%s) ..", name, version)
-        status = (os.system('python setup.py bdist_dumb --format=gztar') == 0)
-        os.chdir(old_directory)
-        if not status:
-            logger.error("Failed to build binary distribution of %s! (%s)!", name, version)
-            return False
-        # Move the generated distribution to the binary index.
-        filenames = os.listdir(os.path.join(directory, 'dist'))
-        if len(filenames) != 1:
-            logger.error("Error: Build process did not result in one binary distribution! (matches: %s)", filenames)
-            return False
-        cache_file = '%s:%s.tar.gz' % (name, version)
-        logger.info("Copying binary distribution %s to cache as %s.", filenames[0], cache_file)
-        cache_binary_distribution(os.path.join(directory, 'dist', filenames[0]),
-                                  os.path.join(binary_index, cache_file))
+        # Try to build the binary distribution.
+        if not build_binary_dist(name, version, directory):
+            if not (sanity_check_dependencies(name) and build_binary_dist(name, version, directory)):
+                return False
     logger.info("Finished building binary distributions.")
+    return True
+
+def build_binary_dist(name, version, directory):
+    """
+    Convert a single, unpacked source distribution to a binary distribution.
+
+    Expects three strings: The name and version of the requirement and the
+    directory where the sources of the requirement are available.
+
+    Returns True if it succeeds in building a binary distribution, False
+    otherwise (probably because of missing binary dependencies like system
+    libraries).
+    """
+    old_directory = os.getcwd()
+    # Build the binary distribution.
+    os.chdir(directory)
+    logger.info("Building binary distribution of %s (%s) ..", name, version)
+    status = (os.system('python setup.py bdist_dumb --format=gztar') == 0)
+    os.chdir(old_directory)
+    if not status:
+        logger.error("Failed to build binary distribution of %s! (%s)!", name, version)
+        return False
+    # Move the generated distribution to the binary index.
+    filenames = os.listdir(os.path.join(directory, 'dist'))
+    if len(filenames) != 1:
+        logger.error("Error: Build process did not result in exactly one binary distribution! (matches: %s)", filenames)
+        return False
+    cache_file = '%s:%s.tar.gz' % (name, version)
+    logger.info("Copying binary distribution %s to cache as %s.", filenames[0], cache_file)
+    cache_binary_distribution(os.path.join(directory, 'dist', filenames[0]),
+                              os.path.join(binary_index, cache_file))
     return True
 
 def cache_binary_distribution(input_path, output_path):
