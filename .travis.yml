@@ -1,3 +1,4 @@
+sudo: false
 language: python
 python:
   - "2.6"
@@ -6,8 +7,6 @@ python:
 env:
   - PIP_ACCEL_S3_BUCKET=
   - PIP_ACCEL_S3_BUCKET=pip-accel-test-bucket
-before_install:
-  - sudo apt-get update
 install:
   - pip install coveralls --editable "file://${PWD}[s3]"
   - gem install fakes3
